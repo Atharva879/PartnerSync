@@ -235,4 +235,4 @@
 - [ ] Validate FCM configuration, Android bundle compatibility, and protected relay behavior
 
 ## GitHub Handoff
-- [ ] Push the current Firebase, preview-stability, and FCM-preparation work to the PartnerSync repository without any credentials
+- [x] Push the current Firebase, preview-stability, and FCM-preparation work to the PartnerSync repository without any credentials
