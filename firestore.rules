@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isPartnershipMember(partnershipId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/partnerships/$(partnershipId))
+        && request.auth.uid in get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.participantIds;
+    }
+
+    function isActivePartnershipMember(partnershipId) {
+      return isPartnershipMember(partnershipId)
+        && get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.status == 'active';
+    }
+
+    function validPartnershipCreate() {
+      return request.resource.data.keys().hasOnly([
+          'participantIds', 'requesterId', 'recipientId', 'status',
+          'requesterPublicKey', 'recipientPublicKey',
+          'requesterTypingUntil', 'recipientTypingUntil', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.participantIds.size() == 2
+        && request.auth.uid in request.resource.data.participantIds
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.recipientId in request.resource.data.participantIds
+        && request.resource.data.requesterId != request.resource.data.recipientId
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.recipientId))
+        && request.resource.data.status == 'pending';
+    }
+
+    function validExistingPartnershipInteraction() {
+      return request.resource.data.participantIds == resource.data.participantIds
+        && request.resource.data.requesterId == resource.data.requesterId
+        && request.resource.data.recipientId == resource.data.recipientId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'requesterPublicKey', 'recipientPublicKey',
+          'requesterTypingUntil', 'recipientTypingUntil', 'updatedAt'
+        ])
+        && (
+          request.resource.data.status == resource.data.status
+          || request.resource.data.status == 'disconnected'
+          || (request.auth.uid == resource.data.recipientId
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'active')
+        );
+    }
+
+    function validReconnectRequest() {
+      return resource.data.status == 'disconnected'
+        && request.resource.data.participantIds == resource.data.participantIds
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.requesterId in resource.data.participantIds
+        && request.resource.data.recipientId in resource.data.participantIds
+        && request.resource.data.requesterId != request.resource.data.recipientId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requesterPublicKey == null
+        && request.resource.data.recipientPublicKey == null
+        && request.resource.data.requesterTypingUntil == null
+        && request.resource.data.recipientTypingUntil == null
+        && request.resource.data.keys().hasOnly([
+          'participantIds', 'requesterId', 'recipientId', 'status',
+          'requesterPublicKey', 'recipientPublicKey',
+          'requesterTypingUntil', 'recipientTypingUntil', 'createdAt', 'updatedAt'
+        ]);
+    }
+
+    match /users/{uid} {
+      allow create: if isSelf(uid)
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'displayName', 'connectionCode', 'createdAt', 'updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.connectionCode == 'PSF1:' + request.auth.uid;
+      allow get: if isSelf(uid);
+      allow update: if isSelf(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.connectionCode == resource.data.connectionCode
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'displayName', 'updatedAt']);
+      allow list, delete: if false;
+
+      match /notificationPreferences/{preferenceId} {
+        allow read, write: if isSelf(uid) && preferenceId == 'default';
+      }
+
+      match /devices/{deviceId} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // A connection code is intentionally shareable. It permits direct lookup only,
+    // never collection enumeration or access to the owner profile.
+    match /connectionCodes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && code == 'PSF1:' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if signedIn()
+        && code == 'PSF1:' + request.auth.uid
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['createdAt']);
+      allow list, delete: if false;
+    }
+
+    match /partnerships/{partnershipId} {
+      allow create: if signedIn() && validPartnershipCreate();
+      allow get, list: if signedIn() && request.auth.uid in resource.data.participantIds;
+      allow update: if isPartnershipMember(partnershipId)
+        && (validExistingPartnershipInteraction() || validReconnectRequest());
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if isActivePartnershipMember(partnershipId);
+        allow create: if isActivePartnershipMember(partnershipId)
+          && request.resource.data.keys().hasOnly([
+            'senderId', 'status', 'clientMessageId', 'encryptedContent', 'nonce',
+            'senderEncryptedContent', 'senderNonce', 'senderPublicKey', 'createdAt'
+          ])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.status == 'sent'
+          && request.resource.data.clientMessageId == messageId;
+        allow update: if isActivePartnershipMember(partnershipId)
+          && request.auth.uid != resource.data.senderId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'deliveredAt', 'readAt'])
+          && request.resource.data.status in ['delivered', 'read'];
+        allow delete: if false;
+      }
+
+      match /tasks/{taskId} {
+        allow get, list: if isActivePartnershipMember(partnershipId);
+        allow create: if isActivePartnershipMember(partnershipId)
+          && request.resource.data.keys().hasOnly(['createdBy', 'title', 'priority', 'completed', 'completedBy', 'createdAt', 'updatedAt'])
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.completed == false
+          && request.resource.data.completedBy == null
+          && request.resource.data.priority in ['low', 'medium', 'high'];
+        allow update: if isActivePartnershipMember(partnershipId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'priority', 'completed', 'completedBy', 'completedAt', 'updatedAt'])
+          && request.resource.data.priority in ['low', 'medium', 'high'];
+        allow delete: if isActivePartnershipMember(partnershipId);
+      }
+
+      match /goals/{goalId} {
+        allow get, list: if isActivePartnershipMember(partnershipId);
+        allow create: if isActivePartnershipMember(partnershipId)
+          && request.resource.data.keys().hasOnly(['title', 'targetRate', 'description', 'createdAt', 'updatedAt'])
+          && request.resource.data.targetRate >= 0
+          && request.resource.data.targetRate <= 100;
+        allow update: if isActivePartnershipMember(partnershipId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'targetRate', 'description', 'updatedAt'])
+          && request.resource.data.targetRate >= 0
+          && request.resource.data.targetRate <= 100;
+        allow delete: if isActivePartnershipMember(partnershipId);
+      }
+    }
+  }
+}

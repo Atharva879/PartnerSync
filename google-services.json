@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "237776814044",
+    "project_id": "partnersync-24c94",
+    "storage_bucket": "partnersync-24c94.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237776814044:android:c9654b2e52ef0110209919",
+        "android_client_info": {
+          "package_name": "com.app.partnerapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCFTJNlDoPWhYZ7VaWdauafeVuJdGaJ-B4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
